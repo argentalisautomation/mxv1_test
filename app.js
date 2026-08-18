@@ -1,4 +1,4 @@
-// MXV1 Web Bluetooth Application Controller with PRN Block-Stream OTA
+// MXV1 Web Bluetooth Application Controller with Industry-Standard PRN Block-Stream OTA
 
 const SERVICE_UUID    = "b04d1815-4604-453d-8868-b7ec257c7426";
 const CHR_RELAY_STATE = "b04d2a56-4604-453d-8868-b7ec257c7426";
@@ -29,11 +29,20 @@ const progressWrap = document.getElementById("progressWrap");
 const progressBar  = document.getElementById("progressBar");
 const otaStatus    = document.getElementById("otaStatus");
 
-// Register Service Worker with immediate update check
+// Register Service Worker
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./service-worker.js').then(reg => {
         reg.update();
     }).catch(err => console.log('SW registration error:', err));
+}
+
+// Universal Write helper (with response)
+async function writeChr(chr, data) {
+    if (chr.writeValueWithResponse) {
+        return await chr.writeValueWithResponse(data);
+    } else {
+        return await chr.writeValue(data);
+    }
 }
 
 // ============================================================
@@ -55,14 +64,13 @@ btnConnect.addEventListener("click", async () => {
     try {
         statusText.textContent = "Requesting Bluetooth Device...";
         
-        // Scan with filters and optional services
         try {
             bleDevice = await navigator.bluetooth.requestDevice({
                 filters: [{ namePrefix: "MXV1" }],
                 optionalServices: [SERVICE_UUID]
             });
         } catch (filterErr) {
-            console.log("Filter scan rejected or cancelled, falling back to acceptAllDevices...", filterErr);
+            console.log("Filter scan fallback to acceptAllDevices...", filterErr);
             bleDevice = await navigator.bluetooth.requestDevice({
                 acceptAllDevices: true,
                 optionalServices: [SERVICE_UUID]
@@ -78,10 +86,10 @@ btnConnect.addEventListener("click", async () => {
         statusText.textContent = `Connecting to ${bleDevice.name || 'Device'}...`;
         gattServer = await bleDevice.gatt.connect();
 
-        statusText.textContent = "Discovering GATT Services...";
+        statusText.textContent = "Discovering Services...";
         const service = await gattServer.getPrimaryService(SERVICE_UUID);
 
-        statusText.textContent = "Reading Characteristics...";
+        statusText.textContent = "Binding Characteristics...";
         chrRelayState = await service.getCharacteristic(CHR_RELAY_STATE);
         chrRelayCmd   = await service.getCharacteristic(CHR_RELAY_CMD);
         chrPower      = await service.getCharacteristic(CHR_POWER);
@@ -126,7 +134,7 @@ btnConnect.addEventListener("click", async () => {
             radarDist.textContent = `Distance: ${dist} cm`;
         });
 
-        // Subscribe to OTA Progress & Flow Control ACKs
+        // Subscribe to OTA Progress & PRN ACKs
         await chrOTA.startNotifications();
         chrOTA.addEventListener("characteristicvaluechanged", onOtaNotify);
 
@@ -157,12 +165,12 @@ relayBtns.forEach(btn => {
     btn.addEventListener("click", async () => {
         if (!chrRelayCmd) return;
         const relayIdx = parseInt(btn.getAttribute("data-relay"));
-        await chrRelayCmd.writeValue(new Uint8Array([relayIdx]));
+        await writeChr(chrRelayCmd, new Uint8Array([relayIdx]));
     });
 });
 
 // ============================================================
-// High-Speed PRN Block-Stream BLE OTA Engine
+// High-Speed Industry-Standard PRN Block-Stream BLE OTA Engine
 // ============================================================
 btnSelectFw.addEventListener("click", () => otaFileInput.click());
 
@@ -181,10 +189,10 @@ otaFileInput.addEventListener("change", async (e) => {
 
     progressWrap.style.display = "block";
     progressBar.style.width = "0%";
-    otaStatus.textContent = `Starting OTA session (${(totalSize/1024).toFixed(0)} KB)...`;
+    otaStatus.textContent = `Initializing flash partition (${(totalSize/1024).toFixed(0)} KB)...`;
 
     try {
-        // 1. Send OTA_BEGIN [0x00][size_u32]
+        // 1. Send OTA_BEGIN [0x00][size_u32] - Synchronous write confirmation
         const beginPkt = new Uint8Array(5);
         beginPkt[0] = 0x00;
         beginPkt[1] = totalSize & 0xFF;
@@ -192,12 +200,11 @@ otaFileInput.addEventListener("change", async (e) => {
         beginPkt[3] = (totalSize >> 16) & 0xFF;
         beginPkt[4] = (totalSize >> 24) & 0xFF;
 
-        const readyPromise = waitForAck(0x04);
-        await chrOTA.writeValue(beginPkt);
-        await readyPromise; // Wait for non-blocking flash prep
+        await writeChr(chrOTA, beginPkt);
+        otaStatus.textContent = "Flash partition ready. Streaming firmware...";
 
         // 2. Stream Data Packets with PRN Sliding Window
-        const CHUNK_SIZE = 490; // High throughput inside 512 MTU
+        const CHUNK_SIZE = 490; // Optimized MTU payload
         let offset = 0;
         let seq = 0;
         let packetsSinceAck = 0;
@@ -216,7 +223,7 @@ otaFileInput.addEventListener("change", async (e) => {
             pkt[6] = (offset >> 24) & 0xFF;
             pkt.set(data.subarray(offset, offset + chunkLen), 7);
 
-            // Stream chunk without response for maximum speed
+            // Stream chunk without response for maximum throughput
             if (chrOTA.writeValueWithoutResponse) {
                 await chrOTA.writeValueWithoutResponse(pkt);
             } else {
@@ -232,29 +239,27 @@ otaFileInput.addEventListener("change", async (e) => {
             const speedKB = ((offset / 1024) / ((Date.now() - startTime) / 1000)).toFixed(1);
             otaStatus.textContent = `Flashing: ${pct}% (${(offset/1024).toFixed(0)}/${(totalSize/1024).toFixed(0)} KB) @ ${speedKB} KB/s`;
 
-            // Every 15 packets (~7.5KB) or at EOF, await PRN ACK from ESP32
+            // Await PRN ACK every 15 packets (~7.5KB) or at EOF
             if (packetsSinceAck >= 15 || offset >= totalSize) {
                 packetsSinceAck = 0;
                 await waitForAck(0x05, 4000);
             }
         }
 
-        // 3. Send OTA_COMMIT [0x03]
+        // 3. Send OTA_COMMIT [0x03] - Synchronous cryptographic verification & partition swap
         otaStatus.textContent = "Verifying SHA-256 Checksum & Committing...";
-        const commitPromise = waitForAck(0x06, 8000);
-        await chrOTA.writeValue(new Uint8Array([0x03]));
-        await commitPromise;
+        await writeChr(chrOTA, new Uint8Array([0x03]));
 
         progressBar.style.width = "100%";
-        otaStatus.textContent = "✅ Success! Firmware updated. Device is rebooting in 1.5s...";
+        otaStatus.textContent = "✅ Success! Firmware verified. Device is rebooting...";
     } catch (err) {
         console.error("OTA Error:", err);
         if (err.message && err.message.includes("GATT Server is disconnected") && progressBar.style.width === "100%") {
             otaStatus.textContent = "✅ Success! Firmware verified and device rebooted.";
         } else {
-            otaStatus.textContent = `OTA Failed: ${err.message}`;
+            otaStatus.textContent = `OTA Failed: ${err.message || err}`;
         }
-        try { await chrOTA.writeValue(new Uint8Array([0xFF])); } catch (_) {}
+        try { await writeChr(chrOTA, new Uint8Array([0xFF])); } catch (_) {}
     }
 });
 
@@ -262,7 +267,7 @@ function waitForAck(expectedOpcode, timeoutMs = 4000) {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
             otaAckResolve = null;
-            reject(new Error(`Timeout waiting for opcode 0x${expectedOpcode.toString(16)}`));
+            reject(new Error(`Timeout waiting for PRN ACK (0x${expectedOpcode.toString(16)})`));
         }, timeoutMs);
 
         otaAckResolve = (opcode, payload) => {
@@ -272,7 +277,7 @@ function waitForAck(expectedOpcode, timeoutMs = 4000) {
                 return true;
             } else if (opcode === 0x0E) { // OTA_ERROR
                 clearTimeout(timer);
-                reject(new Error("ESP32 reported flash verification error"));
+                reject(new Error("ESP32 reported flash write/verification error"));
                 return true;
             }
             return false;
