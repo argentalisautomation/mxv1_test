@@ -224,8 +224,6 @@ otaFileInput.addEventListener("change", async (e) => {
         }
         try { await chrOTA.writeValueWithResponse(new Uint8Array([0xFF])); } catch (_) {}
     }
-        try { await chrOTA.writeValue(new Uint8Array([0xFF])); } catch (_) {}
-    }
 });
 
 function waitForAck(expectedOpcode, timeoutMs = 4000) {
