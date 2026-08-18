@@ -8,10 +8,12 @@ const CHR_RADAR       = "b04d2a5a-4604-453d-8868-b7ec257c7426";
 const CHR_OTA         = "b04d2a58-4604-453d-8868-b7ec257c7426";
 const CHR_FW_VERSION  = "b04d2a5c-4604-453d-8868-b7ec257c7426";
 const CHR_BRIGHTNESS  = "b04d2a5d-4604-453d-8868-b7ec257c7426";
+const CHR_SENSITIVITY = "b04d2a5e-4604-453d-8868-b7ec257c7426";
 
 let bleDevice = null;
 let gattServer = null;
-let chrRelayState = null, chrRelayCmd = null, chrPower = null, chrRadar = null, chrOTA = null, chrBrightness = null;
+let chrRelayState = null, chrRelayCmd = null, chrPower = null, chrRadar = null, chrOTA = null;
+let chrBrightness = null, chrSensitivity = null;
 let otaAckResolve = null;
 
 // UI Elements
@@ -30,6 +32,8 @@ const settingsChevron = document.getElementById("settingsChevron");
 const settingsBody    = document.getElementById("settingsBody");
 const brightSlider    = document.getElementById("brightSlider");
 const brightValBadge  = document.getElementById("brightValBadge");
+const sensSlider      = document.getElementById("sensSlider");
+const sensValBadge    = document.getElementById("sensValBadge");
 
 const btnSelectFw     = document.getElementById("btnSelectFw");
 const otaFileInput    = document.getElementById("otaFileInput");
@@ -49,6 +53,13 @@ settingsToggle.addEventListener("click", () => {
     const isOpen = settingsBody.classList.toggle("open");
     settingsChevron.classList.toggle("open", isOpen);
 });
+
+function formatSensBadge(val) {
+    if (val <= 20) return `${val} (High / Glass)`;
+    if (val <= 50) return `${val} (Normal)`;
+    if (val <= 85) return `${val} (Medium)`;
+    return `${val} (Firm Press)`;
+}
 
 // Universal Write helper (with response)
 async function writeChr(chr, data) {
@@ -110,6 +121,7 @@ btnConnect.addEventListener("click", async () => {
         chrRadar      = await service.getCharacteristic(CHR_RADAR);
         chrOTA        = await service.getCharacteristic(CHR_OTA);
         try { chrBrightness = await service.getCharacteristic(CHR_BRIGHTNESS); } catch (_) {}
+        try { chrSensitivity = await service.getCharacteristic(CHR_SENSITIVITY); } catch (_) {}
 
         // Subscribe to Relay State Notifications
         await chrRelayState.startNotifications();
@@ -170,6 +182,16 @@ btnConnect.addEventListener("click", async () => {
             } catch (_) {}
         }
 
+        // Read Initial CAP1188 Touch Sensitivity
+        if (chrSensitivity) {
+            try {
+                const sVal = await chrSensitivity.readValue();
+                const currentSens = sVal.getUint8(0);
+                sensSlider.value = currentSens;
+                sensValBadge.textContent = formatSensBadge(currentSens);
+            } catch (_) {}
+        }
+
         // Read Firmware Version & Active Boot Slot
         let fwInfo = "v0.01 (legacy)";
         try {
@@ -216,6 +238,24 @@ brightSlider.addEventListener("input", (e) => {
                 await writeChr(chrBrightness, new Uint8Array([val]));
             } catch (err) {
                 console.error("Brightness set error:", err);
+            }
+        }
+    }, 120);
+});
+
+// CAP1188 Touch Sensitivity Slider with Debounce
+let sensTimeout = null;
+sensSlider.addEventListener("input", (e) => {
+    const val = parseInt(e.target.value);
+    sensValBadge.textContent = formatSensBadge(val);
+
+    if (sensTimeout) clearTimeout(sensTimeout);
+    sensTimeout = setTimeout(async () => {
+        if (chrSensitivity) {
+            try {
+                await writeChr(chrSensitivity, new Uint8Array([val]));
+            } catch (err) {
+                console.error("Sensitivity set error:", err);
             }
         }
     }, 120);
