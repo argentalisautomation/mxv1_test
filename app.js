@@ -1,4 +1,4 @@
-// MXV1 Web Bluetooth Application Controller with Industry-Standard PRN Block-Stream OTA
+// MXV1 Web Bluetooth Application Controller with Industry-Standard PRN Block-Stream OTA & Settings
 
 const SERVICE_UUID    = "b04d1815-4604-453d-8868-b7ec257c7426";
 const CHR_RELAY_STATE = "b04d2a56-4604-453d-8868-b7ec257c7426";
@@ -7,28 +7,35 @@ const CHR_POWER       = "b04d2a5b-4604-453d-8868-b7ec257c7426";
 const CHR_RADAR       = "b04d2a5a-4604-453d-8868-b7ec257c7426";
 const CHR_OTA         = "b04d2a58-4604-453d-8868-b7ec257c7426";
 const CHR_FW_VERSION  = "b04d2a5c-4604-453d-8868-b7ec257c7426";
+const CHR_BRIGHTNESS  = "b04d2a5d-4604-453d-8868-b7ec257c7426";
 
 let bleDevice = null;
 let gattServer = null;
-let chrRelayState = null, chrRelayCmd = null, chrPower = null, chrRadar = null, chrOTA = null;
+let chrRelayState = null, chrRelayCmd = null, chrPower = null, chrRadar = null, chrOTA = null, chrBrightness = null;
 let otaAckResolve = null;
 
 // UI Elements
-const btnConnect   = document.getElementById("btnConnect");
-const statusText   = document.getElementById("statusText");
-const mainsWatts   = document.getElementById("mainsWatts");
-const mainsVolts   = document.getElementById("mainsVolts");
-const invWatts     = document.getElementById("invWatts");
-const invVolts     = document.getElementById("invVolts");
-const radarBadge   = document.getElementById("radarBadge");
-const radarDist    = document.getElementById("radarDistance");
-const relayBtns    = document.querySelectorAll(".relay-btn");
+const btnConnect      = document.getElementById("btnConnect");
+const statusText      = document.getElementById("statusText");
+const mainsWatts      = document.getElementById("mainsWatts");
+const mainsVolts      = document.getElementById("mainsVolts");
+const invWatts        = document.getElementById("invWatts");
+const invVolts        = document.getElementById("invVolts");
+const radarBadge      = document.getElementById("radarBadge");
+const radarDist       = document.getElementById("radarDistance");
+const relayBtns       = document.querySelectorAll(".relay-btn");
 
-const btnSelectFw  = document.getElementById("btnSelectFw");
-const otaFileInput = document.getElementById("otaFileInput");
-const progressWrap = document.getElementById("progressWrap");
-const progressBar  = document.getElementById("progressBar");
-const otaStatus    = document.getElementById("otaStatus");
+const settingsToggle  = document.getElementById("settingsToggle");
+const settingsChevron = document.getElementById("settingsChevron");
+const settingsBody    = document.getElementById("settingsBody");
+const brightSlider    = document.getElementById("brightSlider");
+const brightValBadge  = document.getElementById("brightValBadge");
+
+const btnSelectFw     = document.getElementById("btnSelectFw");
+const otaFileInput    = document.getElementById("otaFileInput");
+const progressWrap    = document.getElementById("progressWrap");
+const progressBar     = document.getElementById("progressBar");
+const otaStatus       = document.getElementById("otaStatus");
 
 // Register Service Worker
 if ('serviceWorker' in navigator) {
@@ -36,6 +43,12 @@ if ('serviceWorker' in navigator) {
         reg.update();
     }).catch(err => console.log('SW registration error:', err));
 }
+
+// Collapsible Settings Accordion Toggle
+settingsToggle.addEventListener("click", () => {
+    const isOpen = settingsBody.classList.toggle("open");
+    settingsChevron.classList.toggle("open", isOpen);
+});
 
 // Universal Write helper (with response)
 async function writeChr(chr, data) {
@@ -96,6 +109,7 @@ btnConnect.addEventListener("click", async () => {
         chrPower      = await service.getCharacteristic(CHR_POWER);
         chrRadar      = await service.getCharacteristic(CHR_RADAR);
         chrOTA        = await service.getCharacteristic(CHR_OTA);
+        try { chrBrightness = await service.getCharacteristic(CHR_BRIGHTNESS); } catch (_) {}
 
         // Subscribe to Relay State Notifications
         await chrRelayState.startNotifications();
@@ -146,6 +160,16 @@ btnConnect.addEventListener("click", async () => {
             if (idx < relayBtns.length) relayBtns[idx].classList.toggle("active", st === 1);
         });
 
+        // Read Initial CAP1188 Brightness
+        if (chrBrightness) {
+            try {
+                const bVal = await chrBrightness.readValue();
+                const currentBright = bVal.getUint8(0);
+                brightSlider.value = currentBright;
+                brightValBadge.textContent = `${currentBright}%`;
+            } catch (_) {}
+        }
+
         // Read Firmware Version & Active Boot Slot
         let fwInfo = "v0.01 (legacy)";
         try {
@@ -177,6 +201,24 @@ relayBtns.forEach(btn => {
         const relayIdx = parseInt(btn.getAttribute("data-relay"));
         await writeChr(chrRelayCmd, new Uint8Array([relayIdx]));
     });
+});
+
+// CAP1188 LED Brightness Slider with Debounce
+let brightTimeout = null;
+brightSlider.addEventListener("input", (e) => {
+    const val = parseInt(e.target.value);
+    brightValBadge.textContent = `${val}%`;
+
+    if (brightTimeout) clearTimeout(brightTimeout);
+    brightTimeout = setTimeout(async () => {
+        if (chrBrightness) {
+            try {
+                await writeChr(chrBrightness, new Uint8Array([val]));
+            } catch (err) {
+                console.error("Brightness set error:", err);
+            }
+        }
+    }, 120);
 });
 
 // ============================================================
