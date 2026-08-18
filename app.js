@@ -6,6 +6,7 @@ const CHR_RELAY_CMD   = "b04d2a57-4604-453d-8868-b7ec257c7426";
 const CHR_POWER       = "b04d2a5b-4604-453d-8868-b7ec257c7426";
 const CHR_RADAR       = "b04d2a5a-4604-453d-8868-b7ec257c7426";
 const CHR_OTA         = "b04d2a58-4604-453d-8868-b7ec257c7426";
+const CHR_FW_VERSION  = "b04d2a5c-4604-453d-8868-b7ec257c7426";
 
 let bleDevice = null;
 let gattServer = null;
@@ -145,7 +146,16 @@ btnConnect.addEventListener("click", async () => {
             if (idx < relayBtns.length) relayBtns[idx].classList.toggle("active", st === 1);
         });
 
-        statusText.textContent = `Connected (${bleDevice.name || 'MXV1'})`;
+        // Read Firmware Version & Active Boot Slot
+        let fwInfo = "v0.01 (legacy)";
+        try {
+            const chrFw = await service.getCharacteristic(CHR_FW_VERSION);
+            const fwVal = await chrFw.readValue();
+            const dec = new TextDecoder();
+            fwInfo = dec.decode(fwVal);
+        } catch (_) {}
+
+        statusText.textContent = `Connected: ${bleDevice.name || 'MXV1'} [${fwInfo}]`;
         btnConnect.textContent = "Disconnect";
         btnConnect.style.background = "#ef4444";
     } catch (err) {
