@@ -13,43 +13,75 @@ let chrRelayState = null, chrRelayCmd = null, chrPower = null, chrRadar = null, 
 let otaAckResolve = null;
 
 // UI Elements
-const btnConnect = document.getElementById("btnConnect");
-const statusText = document.getElementById("statusText");
-const mainsWatts = document.getElementById("mainsWatts");
-const mainsVolts = document.getElementById("mainsVolts");
-const invWatts   = document.getElementById("invWatts");
-const invVolts   = document.getElementById("invVolts");
-const radarBadge = document.getElementById("radarBadge");
-const radarDist  = document.getElementById("radarDistance");
-const relayBtns  = document.querySelectorAll(".relay-btn");
+const btnConnect   = document.getElementById("btnConnect");
+const statusText   = document.getElementById("statusText");
+const mainsWatts   = document.getElementById("mainsWatts");
+const mainsVolts   = document.getElementById("mainsVolts");
+const invWatts     = document.getElementById("invWatts");
+const invVolts     = document.getElementById("invVolts");
+const radarBadge   = document.getElementById("radarBadge");
+const radarDist    = document.getElementById("radarDistance");
+const relayBtns    = document.querySelectorAll(".relay-btn");
 
-const btnSelectFw   = document.getElementById("btnSelectFw");
-const otaFileInput  = document.getElementById("otaFileInput");
-const progressWrap  = document.getElementById("progressWrap");
-const progressBar   = document.getElementById("progressBar");
-const otaStatus     = document.getElementById("otaStatus");
+const btnSelectFw  = document.getElementById("btnSelectFw");
+const otaFileInput = document.getElementById("otaFileInput");
+const progressWrap = document.getElementById("progressWrap");
+const progressBar  = document.getElementById("progressBar");
+const otaStatus    = document.getElementById("otaStatus");
+
+// Register Service Worker with immediate update check
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./service-worker.js').then(reg => {
+        reg.update();
+    }).catch(err => console.log('SW registration error:', err));
+}
 
 // ============================================================
 // BLE Connection
 // ============================================================
 btnConnect.addEventListener("click", async () => {
+    if (!navigator.bluetooth) {
+        alert("Web Bluetooth is not supported on this browser/environment.\n\nPlease open this page in Google Chrome or Microsoft Edge on Android, Windows, or Mac with HTTPS.");
+        statusText.textContent = "Web Bluetooth Not Supported";
+        return;
+    }
+
     if (bleDevice && bleDevice.gatt.connected) {
+        statusText.textContent = "Disconnecting...";
         bleDevice.gatt.disconnect();
         return;
     }
 
     try {
-        statusText.textContent = "Scanning for MXV1...";
-        bleDevice = await navigator.bluetooth.requestDevice({
-            filters: [{ namePrefix: "MXV1" }],
-            optionalServices: [SERVICE_UUID]
-        });
+        statusText.textContent = "Requesting Bluetooth Device...";
+        
+        // Scan with filters and optional services
+        try {
+            bleDevice = await navigator.bluetooth.requestDevice({
+                filters: [{ namePrefix: "MXV1" }],
+                optionalServices: [SERVICE_UUID]
+            });
+        } catch (filterErr) {
+            console.log("Filter scan rejected or cancelled, falling back to acceptAllDevices...", filterErr);
+            bleDevice = await navigator.bluetooth.requestDevice({
+                acceptAllDevices: true,
+                optionalServices: [SERVICE_UUID]
+            });
+        }
+
+        if (!bleDevice) {
+            statusText.textContent = "No device selected.";
+            return;
+        }
 
         bleDevice.addEventListener("gattserverdisconnected", onDisconnected);
-        statusText.textContent = "Connecting...";
+        statusText.textContent = `Connecting to ${bleDevice.name || 'Device'}...`;
         gattServer = await bleDevice.gatt.connect();
 
+        statusText.textContent = "Discovering GATT Services...";
         const service = await gattServer.getPrimaryService(SERVICE_UUID);
+
+        statusText.textContent = "Reading Characteristics...";
         chrRelayState = await service.getCharacteristic(CHR_RELAY_STATE);
         chrRelayCmd   = await service.getCharacteristic(CHR_RELAY_CMD);
         chrPower      = await service.getCharacteristic(CHR_POWER);
@@ -105,12 +137,12 @@ btnConnect.addEventListener("click", async () => {
             if (idx < relayBtns.length) relayBtns[idx].classList.toggle("active", st === 1);
         });
 
-        statusText.textContent = "Connected (Bluetooth BLE)";
+        statusText.textContent = `Connected (${bleDevice.name || 'MXV1'})`;
         btnConnect.textContent = "Disconnect";
         btnConnect.style.background = "#ef4444";
     } catch (err) {
         console.error("BLE Connect Error:", err);
-        statusText.textContent = `Error: ${err.message}`;
+        statusText.textContent = `Error: ${err.message || err}`;
     }
 });
 
@@ -210,7 +242,7 @@ otaFileInput.addEventListener("change", async (e) => {
         // 3. Send OTA_COMMIT [0x03]
         otaStatus.textContent = "Verifying SHA-256 Checksum & Committing...";
         const commitPromise = waitForAck(0x06, 8000);
-        await chrOTA.writeValueWithResponse(new Uint8Array([0x03]));
+        await chrOTA.writeValue(new Uint8Array([0x03]));
         await commitPromise;
 
         progressBar.style.width = "100%";
@@ -222,7 +254,7 @@ otaFileInput.addEventListener("change", async (e) => {
         } else {
             otaStatus.textContent = `OTA Failed: ${err.message}`;
         }
-        try { await chrOTA.writeValueWithResponse(new Uint8Array([0xFF])); } catch (_) {}
+        try { await chrOTA.writeValue(new Uint8Array([0xFF])); } catch (_) {}
     }
 });
 
