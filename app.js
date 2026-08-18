@@ -55,10 +55,14 @@ settingsToggle.addEventListener("click", () => {
 });
 
 function formatSensBadge(val) {
-    if (val <= 20) return `${val} (High / Glass)`;
-    if (val <= 50) return `${val} (Normal)`;
-    if (val <= 85) return `${val} (Medium)`;
-    return `${val} (Firm Press)`;
+    if (val < 16) return `${val} (128x Hover / Proximity)`;
+    if (val < 32) return `${val} (64x Thick Glass)`;
+    if (val < 48) return `${val} (32x Normal Glass)`;
+    if (val < 64) return `${val} (16x Standard Panel)`;
+    if (val < 80) return `${val} (8x Light Touch)`;
+    if (val < 96) return `${val} (4x Direct Touch)`;
+    if (val < 112) return `${val} (2x Firm Press)`;
+    return `${val} (1x Heavy Press)`;
 }
 
 // Universal Write helper (with response)
