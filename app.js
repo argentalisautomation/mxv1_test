@@ -200,24 +200,30 @@ otaFileInput.addEventListener("change", async (e) => {
             const speedKB = ((offset / 1024) / ((Date.now() - startTime) / 1000)).toFixed(1);
             otaStatus.textContent = `Flashing: ${pct}% (${(offset/1024).toFixed(0)}/${(totalSize/1024).toFixed(0)} KB) @ ${speedKB} KB/s`;
 
-            // Every 10 packets (~5KB) or at EOF, await PRN ACK from ESP32
-            if (packetsSinceAck >= 10 || offset >= totalSize) {
+            // Every 15 packets (~7.5KB) or at EOF, await PRN ACK from ESP32
+            if (packetsSinceAck >= 15 || offset >= totalSize) {
                 packetsSinceAck = 0;
-                await waitForAck(0x05, 3000);
+                await waitForAck(0x05, 4000);
             }
         }
 
         // 3. Send OTA_COMMIT [0x03]
         otaStatus.textContent = "Verifying SHA-256 Checksum & Committing...";
-        const commitPromise = waitForAck(0x06, 5000);
-        await chrOTA.writeValue(new Uint8Array([0x03]));
+        const commitPromise = waitForAck(0x06, 8000);
+        await chrOTA.writeValueWithResponse(new Uint8Array([0x03]));
         await commitPromise;
 
         progressBar.style.width = "100%";
-        otaStatus.textContent = "Success! Firmware updated. Device is rebooting in 1s...";
+        otaStatus.textContent = "✅ Success! Firmware updated. Device is rebooting in 1.5s...";
     } catch (err) {
         console.error("OTA Error:", err);
-        otaStatus.textContent = `OTA Failed: ${err.message}`;
+        if (err.message && err.message.includes("GATT Server is disconnected") && progressBar.style.width === "100%") {
+            otaStatus.textContent = "✅ Success! Firmware verified and device rebooted.";
+        } else {
+            otaStatus.textContent = `OTA Failed: ${err.message}`;
+        }
+        try { await chrOTA.writeValueWithResponse(new Uint8Array([0xFF])); } catch (_) {}
+    }
         try { await chrOTA.writeValue(new Uint8Array([0xFF])); } catch (_) {}
     }
 });
